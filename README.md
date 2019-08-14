@@ -1,7 +1,9 @@
 ---
 page_type: sample
-languages: java
-products: azure
+languages:
+- java
+products:
+- azure
 services: Monitor
 platforms: dotnet
 author: yaohaizh
@@ -26,9 +28,9 @@ Set the environment variable `AZURE_AUTH_LOCATION` with the full path for an aut
     git clone https://github.com/Azure-Samples/monitor-dotnet-autoscale-based-on-performance.git
 
     cd monitor-dotnet-autoscale-based-on-performance
-  
+
     dotnet build
-    
+
     bin\Debug\net452\AutoscaleSettingsBasedOnPerformanceOrSchedule.exe
 
 ## More information ##
