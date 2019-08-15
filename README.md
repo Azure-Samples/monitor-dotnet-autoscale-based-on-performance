@@ -4,19 +4,19 @@ languages:
 - csharp
 products:
 - azure
-services: Monitor
-platforms: dotnet
-author: yaohaizh
+extensions:
+- services: Monitor
+- platforms: dotnet
 ---
 
 # Configuring autoscale settings to scale out based on webapp request count statistic. #
 
-          This sample shows how to programmatically implement scenario described <a href="https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitor-tutorial-autoscale-performance-schedule">here</a>.
-           - Create a Web App and App Service Plan
-           - Configure autoscale rules for scale-in and scale out based on the number of requests a Web App receives
-           - Trigger a scale-out action and watch the number of instances increase
-           - Trigger a scale-in action and watch the number of instances decrease
-           - Clean up your resources
+ This sample shows how to programmatically implement scenario described <a href="https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitor-tutorial-autoscale-performance-schedule">here</a>.
+  - Create a Web App and App Service Plan
+  - Configure autoscale rules for scale-in and scale out based on the number of requests a Web App receives
+  - Trigger a scale-out action and watch the number of instances increase
+  - Trigger a scale-in action and watch the number of instances decrease
+  - Clean up your resources
 
 
 ## Running this Sample ##
