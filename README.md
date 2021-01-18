@@ -5,8 +5,8 @@ languages:
 products:
 - azure
 extensions:
-- services: Monitor
-- platforms: dotnet
+  services: Monitor
+  platforms: dotnet
 ---
 
 # Configuring autoscale settings to scale out based on webapp request count statistic. #
