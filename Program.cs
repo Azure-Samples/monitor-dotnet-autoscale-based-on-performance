@@ -1,19 +1,16 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+﻿// Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License. See License.txt in the project root for license information.
 
-using Microsoft.Azure.Management.Fluent;
-using Microsoft.Azure.Management.ResourceManager.Fluent;
-using Microsoft.Azure.Management.ResourceManager.Fluent.Core;
-using Microsoft.Azure.Management.Samples.Common;
-using Microsoft.WindowsAzure.Storage;
-using Microsoft.WindowsAzure.Storage.Blob;
-using Microsoft.WindowsAzure.Storage.Shared.Protocol;
-using System;
-using System.Linq;
-using System.IO;
-using Microsoft.Azure.Management.AppService.Fluent;
-using Microsoft.Azure.Management.Monitor.Fluent.Models;
-using DayOfWeek = Microsoft.Azure.Management.Monitor.Fluent.Models.DayOfWeek;
+using Azure;
+using Azure.Core;
+using Azure.Identity;
+using Azure.ResourceManager;
+using Azure.ResourceManager.AppService;
+using Azure.ResourceManager.AppService.Models;
+using Azure.ResourceManager.Monitor;
+using Azure.ResourceManager.Monitor.Models;
+using Azure.ResourceManager.Resources;
+using Azure.ResourceManager.Samples.Common;
 
 namespace AutoscaleSettingsBasedOnPerformanceOrSchedule
 {
@@ -27,121 +24,141 @@ namespace AutoscaleSettingsBasedOnPerformanceOrSchedule
          *  - Trigger a scale-in action and watch the number of instances decrease
          *  - Clean up your resources
          */
-        public static void RunSample(IAzure azure)
+        private static ResourceIdentifier? _resourceGroupId = null;
+        public static async Task RunSample(ArmClient client)
         {
-
-            string webappName = SdkContext.RandomResourceName("MyTestScaleWebApp", 25);
-            string autoscaleSettingsName = SdkContext.RandomResourceName("autoscalename1", 20);
-            string rgName = SdkContext.RandomResourceName("rgMonitor", 15);
-
             try
             {
                 // ============================================================
-                // Create a Web App and App Service Plan
-                Utilities.Log("Creating a web app and service plan");
+           
+                // Get default subscription
+                SubscriptionResource subscription = await client.GetDefaultSubscriptionAsync();
+                var rgName = Utilities.CreateRandomName("rgMonitor");
+                Utilities.Log($"creating a resource group with name : {rgName}...");
+                var rgLro = await subscription.GetResourceGroups().CreateOrUpdateAsync(WaitUntil.Completed, rgName, new ResourceGroupData(AzureLocation.EastUS2));
+                var resourceGroup = rgLro.Value;
+                _resourceGroupId = resourceGroup.Id;
+                Utilities.Log("Created a resource group with name: " + resourceGroup.Data.Name);
 
-                var webapp = azure.WebApps.Define(webappName)
-                    .WithRegion(Region.USSouthCentral)
-                    .WithNewResourceGroup(rgName)
-                    .WithNewWindowsPlan(PricingTier.PremiumP1)
-                    .Create();
+                //Create a Web App
+                Utilities.Log("Creating a web app");
+                var websiteCollection = resourceGroup.GetWebSites();
+                var websiteName = Utilities.CreateRandomName("MyTestScaleWebApp");
+                var websiteData = new WebSiteData(AzureLocation.SouthCentralUS);
+                var website = (await websiteCollection.CreateOrUpdateAsync(WaitUntil.Completed,websiteName,websiteData)).Value;
+                Utilities.Log("Created a web app with name :" + website.Data.Name);
 
-                Utilities.Log("Created a web app:");
-                Utilities.Print(webapp);
-
-                // ============================================================
-                // Configure autoscale rules for scale-in and scale out based on the number of requests a Web App receives
-                var scaleSettings = azure.AutoscaleSettings.Define(autoscaleSettingsName)
-                        .WithRegion(Region.USSouthCentral)
-                        .WithExistingResourceGroup(rgName)
-                        .WithTargetResource(webapp.AppServicePlanId)
-                        // defining Default profile. Note: first created profile is always the default one.
-                        .DefineAutoscaleProfile("Default profile")
-                            .WithFixedInstanceCount(1)
-                            .Attach()
-                        // defining Monday to Friday profile
-                        .DefineAutoscaleProfile("Monday to Friday")
-                            .WithMetricBasedScale(1, 2, 1)
-                            // Create a scale-out rule
-                            .DefineScaleRule()
-                                .WithMetricSource(webapp.Id)
-                                .WithMetricName("Requests")
-                                .WithStatistic(TimeSpan.FromMinutes(5), MetricStatisticType.Sum)
-                                .WithCondition(TimeAggregationType.Total, ComparisonOperationType.GreaterThan, 10)
-                                .WithScaleAction(ScaleDirection.Increase, ScaleType.ChangeCount, 1, TimeSpan.FromMinutes(5))
-                                .Attach()
-                            // Create a scale-in rule
-                            .DefineScaleRule()
-                                .WithMetricSource(webapp.Id)
-                                .WithMetricName("Requests")
-                                .WithStatistic(TimeSpan.FromMinutes(10), MetricStatisticType.Average)
-                                .WithCondition(TimeAggregationType.Total, ComparisonOperationType.LessThan, 5)
-                                .WithScaleAction(ScaleDirection.Decrease, ScaleType.ChangeCount, 1, TimeSpan.FromMinutes(5))
-                                .Attach()
-                            // Create profile schedule
-                            .WithRecurrentSchedule("Pacific Standard Time", "09:00", DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday)
-                            .Attach()
-                        // define end time for the "Monday to Friday" profile specified above
-                        .DefineAutoscaleProfile("{\"name\":\"Default\",\"for\":\"Monday to Friday\"}")
-                            .WithScheduleBasedScale(1)
-                            .WithRecurrentSchedule("Pacific Standard Time", "18:30", DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday)
-                            .Attach()
-                        .Create();
-
-                var deployedWebAppUrl = "https://" + webapp.HostNames.First() + "/";
-                // Trigger scale-out action
-                for (int i = 0; i < 11; i++)
+                //Create a App Service Plan
+                Utilities.Log("Creating app service plan");
+                var appServicePlanCollection = resourceGroup.GetAppServicePlans();
+                var appServicePlanName = Utilities.CreateRandomName("MyTestAppServicePlan");
+                var appServicePlanData = new AppServicePlanData(AzureLocation.SouthCentralUS)
                 {
-                    SdkContext.DelayProvider.Delay(5000);
-                    Utilities.CheckAddress(deployedWebAppUrl);
-                }
+                    Sku = new AppServiceSkuDescription
+                    {
+                        Name = "P1",
+                        Tier = "Premium",
+                        Capacity = 1
+                    },
+                    Kind = "app"
+                };
+                var appServicePlan = (await appServicePlanCollection.CreateOrUpdateAsync(WaitUntil.Completed, appServicePlanName, appServicePlanData)).Value;
+                Utilities.Log("Created app service plan with name:" + appServicePlan.Data.Name);
+                
+                // ============================================================
 
-                // Now you can browse the history of autoscale form the azure portal
-                // 1. Open the App Service Plan.
-                // 2. From the left-hand navigation pane, select the Monitor option. Once the page loads select the Autoscale tab.
-                // 3. From the list, select the App Service Plan used throughout this tutorial.
-                // 4. On the autoscale setting, click the Run history tab.
-                // 5. You see a chart reflecting the instance count of the App Service Plan over time.
-                // 6. In a few minutes, the instance count should rise from 1, to 2.
-                // 7. Under the chart, you see the activity log entries for each scale action taken by this autoscale setting.
+                // Configure autoscale rules for scale-in and scale out based on the number of requests a Web App receives
+                Utilities.Log("Creating autoscaleSetting...");
+                var autoscaleSettingsCollection = resourceGroup.GetAutoscaleSettings();
+                var autoscaleSettingName = Utilities.CreateRandomName("autoscalename1");
+                var rules = new List<AutoscaleRule>()
+                {
+                    new(
+                        new MetricTrigger("Requests", website.Id, TimeSpan.FromMinutes(5), MetricStatisticType.Sum, TimeSpan.FromMinutes(5), MetricTriggerTimeAggregationType.Total, MetricTriggerComparisonOperation.GreaterThan, 10)
+                        {
+                            MetricNamespace = "Microsoft.Web/sites",
+                        },
+                        new MonitorScaleAction(MonitorScaleDirection.Increase, MonitorScaleType.ChangeCount, TimeSpan.FromMinutes(5))
+                        {
+                            Value = "1",
+                        }
+                    ),
+                    new(
+                        new MetricTrigger("Requests",website.Id,TimeSpan.FromMinutes(10),MetricStatisticType.Average,TimeSpan.FromMinutes(10),MetricTriggerTimeAggregationType.Total,MetricTriggerComparisonOperation.LessThan,5),
+                        new MonitorScaleAction(MonitorScaleDirection.Decrease, MonitorScaleType.ChangeCount, TimeSpan.FromMinutes(5))
+                        {
+                            Value = "1",
+                        }
+                    ),
+                };
+                var days = new List<MonitorDayOfWeek>()
+                {
+                    MonitorDayOfWeek.Monday,
+                    MonitorDayOfWeek.Tuesday,
+                    MonitorDayOfWeek.Wednesday,
+                    MonitorDayOfWeek.Thursday,
+                    MonitorDayOfWeek.Friday,
+                };
+                var schedule = new RecurrentSchedule("Pacific Standard Time", days, new[] { 9 }, new[] { 00 });
+                var schedule2 = new RecurrentSchedule("Pacific Standard Time", days, new[] { 18 }, new[] { 30 });
+                var profiles = new List<AutoscaleProfile>()
+                {
+                    new AutoscaleProfile("Default profile", new MonitorScaleCapacity(1,1,1), rules),
+                    new AutoscaleProfile("Monday to Friday", new MonitorScaleCapacity(1,2,1), rules)
+                    {
+                        Recurrence = new MonitorRecurrence(RecurrenceFrequency.Week, schedule)
+                    },
+                    new AutoscaleProfile("{\"name\":\"Default\",\"for\":\"Monday to Friday\"}", new MonitorScaleCapacity(1,1,1), rules)
+                    {
+                        Recurrence = new MonitorRecurrence(RecurrenceFrequency.Week, schedule2)
+                    },
+                };
+                var autoscaleSettingData = new AutoscaleSettingData(AzureLocation.SouthCentralUS, profiles)
+                {
+                    IsEnabled = true,
+                    TargetResourceId = new ResourceIdentifier(appServicePlan.Id),
+                };
+                var autoscaleSettings = (await autoscaleSettingsCollection.CreateOrUpdateAsync(WaitUntil.Completed,autoscaleSettingName, autoscaleSettingData)).Value;
+                Utilities.Log("Created autoscaleSettings with name :" + autoscaleSettings.Data.Name);
+                var deployedWebAppUrl = "https://" + website.Data.HostNames.First() + "/";
+                Utilities.Log(deployedWebAppUrl);
             }
             finally
             {
-                if (azure.ResourceGroups.GetByName(rgName) != null)
+                try
                 {
-                    Utilities.Log("Deleting Resource Group: " + rgName);
-                    azure.ResourceGroups.BeginDeleteByName(rgName);
-                    Utilities.Log("Deleted Resource Group: " + rgName);
+                    if (_resourceGroupId is not null)
+                    {
+                        Utilities.Log($"Deleting Resource Group: {_resourceGroupId}");
+                        await client.GetResourceGroupResource(_resourceGroupId).DeleteAsync(WaitUntil.Completed);
+                        Utilities.Log($"Deleted Resource Group: {_resourceGroupId}");
+                    }
                 }
-                else
+                catch (NullReferenceException)
                 {
                     Utilities.Log("Did not create any resources in Azure. No clean up is necessary");
                 }
+                catch (Exception g)
+                {
+                    Utilities.Log(g);
+                }
             }
         }
-
-        public static void Main(string[] args)
+        public static async Task Main(string[] args)
         {
             try
             {
-                //=================================================================
-                // Authenticate
-                var credentials = SdkContext.AzureCredentialsFactory.FromFile(Environment.GetEnvironmentVariable("AZURE_AUTH_LOCATION"));
-
-                var azure = Azure
-                    .Configure()
-                    .WithLogLevel(HttpLoggingDelegatingHandler.Level.Basic)
-                    .Authenticate(credentials)
-                    .WithDefaultSubscription();
-
-                // Print selected subscription
-                Utilities.Log("Selected subscription: " + azure.SubscriptionId);
-
-                RunSample(azure);
+                var clientId = Environment.GetEnvironmentVariable("CLIENT_ID");
+                var clientSecret = Environment.GetEnvironmentVariable("CLIENT_SECRET");
+                var tenantId = Environment.GetEnvironmentVariable("TENANT_ID");
+                var subscription = Environment.GetEnvironmentVariable("SUBSCRIPTION_ID");
+                ClientSecretCredential credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+                ArmClient client = new ArmClient(credential, subscription);
+                await RunSample(client);
             }
-            catch (Exception ex)
+            catch (Exception e)
             {
-                Utilities.Log(ex);
+                Utilities.Log(e);
             }
         }
     }
